@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Application user profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "DailyGrid": {
+      "title": "Daily Grid",
+      "description": "Daily color and photo grid entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "color": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "hex": { "type": "string" }
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": { "type": "string", "description": "Base64 image data" }
+        },
+        "extractedColors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hex": { "type": "string" },
+              "name": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["userId", "date", "color"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "dailyGrids/{gridId}": {
+      "schema": "DailyGrid",
+      "description": "Daily entries"
+    }
+  }
+}
