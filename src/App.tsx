@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useMemo, Component, ReactNode } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Component, ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -11,38 +11,41 @@ import {
   ChevronLeft, 
   ChevronRight, 
   RefreshCw, 
-  Camera, 
   X,
-  LogOut,
-  Palette,
-  Check,
   Share2
 } from 'lucide-react';
 import { format, addDays, subDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, isToday } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import { getPaletteSync } from 'colorthief';
 import confetti from 'canvas-confetti';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { toJpeg } from 'html-to-image';
-
-import { auth, db, signIn, logout } from './firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { 
-  collection, 
-  query, 
-  where, 
-  onSnapshot, 
-  doc, 
-  setDoc, 
-  getDoc,
-  getDocs,
-  Timestamp 
-} from 'firebase/firestore';
 import { NICHE_COLORS, AestheticColor, DailyGridData } from './types';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// --- Local Storage Helpers ---
+
+const STORAGE_KEY = 'colorgrid_data';
+
+function loadAllGrids(): Record<string, DailyGridData> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load data from localStorage', e);
+  }
+  return {};
+}
+
+function saveAllGrids(grids: Record<string, DailyGridData>) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(grids));
+  } catch (e) {
+    console.error('Failed to save data to localStorage', e);
+  }
 }
 
 // --- Helpers ---
@@ -63,13 +66,6 @@ const resizeImage = (base64: string, maxWidth = 400): Promise<string> => {
       resolve(canvas.toDataURL('image/jpeg', 0.7));
     };
   });
-};
-
-const rgbToHex = (r: number, g: number, b: number) => {
-  return '#' + [r, g, b].map(x => {
-    const hex = x.toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  }).join('');
 };
 
 // --- Components ---
@@ -95,46 +91,35 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 }
 
-const GUEST_ID = 'public_guest';
-
 export default function App() {
-  const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showCalendar, setShowCalendar] = useState(false);
   const [viewMonth, setViewMonth] = useState(new Date());
-  const [allGrids, setAllGrids] = useState<Record<string, DailyGridData>>({});
-  const [isExtracting, setIsExtracting] = useState(false);
+  const [allGrids, setAllGrids] = useState<Record<string, DailyGridData>>(() => loadAllGrids());
   const [isExporting, setIsExporting] = useState(false);
-  const cardRef = useRef<HTMLDivElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
+  // Persist to localStorage whenever allGrids changes
   useEffect(() => {
-    const q = query(collection(db, 'dailyGrids'), where('userId', '==', GUEST_ID));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data: Record<string, DailyGridData> = {};
-      snapshot.forEach((doc) => {
-        const grid = doc.data() as DailyGridData;
-        data[grid.date] = grid;
-      });
-      setAllGrids(data);
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, []);
+    saveAllGrids(allGrids);
+  }, [allGrids]);
 
   const dateKey = format(currentDate, 'yyyy-MM-dd');
   const currentGrid = allGrids[dateKey];
 
-  const handleSaveGrid = async (updates: Partial<DailyGridData>) => {
-    const docId = `${GUEST_ID}_${dateKey}`;
-    const newGrid: DailyGridData = {
-      userId: GUEST_ID,
-      date: dateKey,
-      color: currentGrid?.color || NICHE_COLORS[Math.floor(Math.random() * NICHE_COLORS.length)],
-      images: currentGrid?.images || Array(9).fill(''),
-      ...updates
-    };
-    await setDoc(doc(db, 'dailyGrids', docId), newGrid);
-  };
+  const handleSaveGrid = useCallback((updates: Partial<DailyGridData>) => {
+    setAllGrids(prev => {
+      const existing = prev[dateKey];
+      const newGrid: DailyGridData = {
+        userId: 'local',
+        date: dateKey,
+        color: existing?.color || NICHE_COLORS[Math.floor(Math.random() * NICHE_COLORS.length)],
+        images: existing?.images || Array(9).fill(''),
+        ...updates
+      };
+      return { ...prev, [dateKey]: newGrid };
+    });
+  }, [dateKey]);
 
   const handleRandomColor = () => {
     const randomColor = NICHE_COLORS[Math.floor(Math.random() * NICHE_COLORS.length)];
@@ -148,28 +133,32 @@ export default function App() {
   };
 
   const handleExport = async () => {
-    if (!cardRef.current) return;
+    if (!exportRef.current) return;
     setIsExporting(true);
     
-    // Wait for state update to hide buttons
-    setTimeout(async () => {
-      try {
-        const dataUrl = await toJpeg(cardRef.current!, {
-          quality: 0.95,
-          backgroundColor: '#fdfcfb',
-          pixelRatio: 2,
-        });
-        
-        const link = document.createElement('a');
-        link.download = `ColorGrid-${format(currentDate, 'yyyyMMdd')}.jpg`;
-        link.href = dataUrl;
-        link.click();
-      } catch (err) {
-        console.error('Export failed:', err);
-      } finally {
-        setIsExporting(false);
-      }
-    }, 100);
+    await new Promise(r => setTimeout(r, 200));
+    
+    try {
+      const dataUrl = await toJpeg(exportRef.current!, {
+        quality: 0.95,
+        backgroundColor: '#fdfcfb',
+        pixelRatio: 2,
+        width: 400,
+        style: {
+          transform: 'none',
+          position: 'static',
+        }
+      });
+      
+      const link = document.createElement('a');
+      link.download = `ColorGrid-${format(currentDate, 'yyyyMMdd')}.jpg`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleUpload = async (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -182,8 +171,6 @@ export default function App() {
       const resized = await resizeImage(base64);
       const newImages = [...(currentGrid?.images || Array(9).fill(''))];
       newImages[index] = resized;
-      
-      // Extract colors if all images are present or just update
       handleSaveGrid({ images: newImages });
     };
     reader.readAsDataURL(file);
@@ -191,74 +178,184 @@ export default function App() {
 
   const extractColors = async () => {
     if (!currentGrid || currentGrid.images.filter(img => img).length === 0) return;
-    setIsExtracting(true);
+    
+    const activeImages = currentGrid.images.filter(img => img);
+    
+    // Collect pixels from ALL images
+    const allPixels: [number, number, number][] = [];
+    
+    const loadImage = (src: string): Promise<HTMLImageElement> => {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+      });
+    };
     
     try {
-      const activeImages = currentGrid.images.filter(img => img);
-      const imgElement = new Image();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
       
-      imgElement.onload = () => {
-        try {
-          console.log('Image loaded, starting extraction');
-          const palette = getPaletteSync(imgElement, { colorCount: 5 });
-          console.log('Palette extracted:', palette);
-          
-          if (palette) {
-            const colors = palette.map((c: any) => ({
-              hex: c.hex(),
-              name: '提取色'
-            }));
-            handleSaveGrid({ extractedColors: colors });
-          }
-        } catch (e) {
-          console.error('ColorThief error', e);
-        } finally {
-          setIsExtracting(false);
+      for (const src of activeImages) {
+        const img = await loadImage(src);
+        const size = 150;
+        canvas.width = size;
+        canvas.height = size;
+        ctx.drawImage(img, 0, 0, size, size);
+        
+        const imageData = ctx.getImageData(0, 0, size, size).data;
+        for (let i = 0; i < imageData.length; i += 4) {
+          const r = imageData[i];
+          const g = imageData[i + 1];
+          const b = imageData[i + 2];
+          const a = imageData[i + 3];
+          // Skip near-white, near-black, and transparent pixels
+          if (a < 128) continue;
+          const brightness = r + g + b;
+          if (brightness < 30 || brightness > 735) continue;
+          // Skip very low saturation (grayish) pixels
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          if (max - min < 15 && brightness > 100 && brightness < 650) continue;
+          allPixels.push([r, g, b]);
         }
+      }
+      
+      if (allPixels.length === 0) return;
+      
+      // Median Cut algorithm for color quantization
+      type ColorBox = { pixels: [number, number, number][] };
+      
+      const getRange = (pixels: [number, number, number][], channel: number) => {
+        let min = 255, max = 0;
+        for (const p of pixels) {
+          if (p[channel] < min) min = p[channel];
+          if (p[channel] > max) max = p[channel];
+        }
+        return max - min;
       };
-
-      imgElement.onerror = () => {
-        console.error('Image load failed for color extraction');
-        setIsExtracting(false);
+      
+      const splitBox = (box: ColorBox): [ColorBox, ColorBox] => {
+        const { pixels } = box;
+        const rangeR = getRange(pixels, 0);
+        const rangeG = getRange(pixels, 1);
+        const rangeB = getRange(pixels, 2);
+        
+        // Split along the channel with the widest range
+        let sortChannel = 0;
+        if (rangeG >= rangeR && rangeG >= rangeB) sortChannel = 1;
+        else if (rangeB >= rangeR && rangeB >= rangeG) sortChannel = 2;
+        
+        pixels.sort((a, b) => a[sortChannel] - b[sortChannel]);
+        const mid = Math.floor(pixels.length / 2);
+        return [
+          { pixels: pixels.slice(0, mid) },
+          { pixels: pixels.slice(mid) }
+        ];
       };
-
-      imgElement.crossOrigin = 'Anonymous';
-      imgElement.src = activeImages[0];
-    } catch (err) {
-      console.error('Color extraction failed', err);
-      setIsExtracting(false);
+      
+      const getAvgColor = (pixels: [number, number, number][]): [number, number, number] => {
+        let rSum = 0, gSum = 0, bSum = 0;
+        for (const [r, g, b] of pixels) {
+          rSum += r; gSum += g; bSum += b;
+        }
+        const n = pixels.length;
+        return [Math.round(rSum / n), Math.round(gSum / n), Math.round(bSum / n)];
+      };
+      
+      // Subsample if too many pixels for performance
+      let sampledPixels = allPixels;
+      if (allPixels.length > 50000) {
+        const step = Math.ceil(allPixels.length / 50000);
+        sampledPixels = allPixels.filter((_, i) => i % step === 0);
+      }
+      
+      // Start with one box, split until we have 5
+      let boxes: ColorBox[] = [{ pixels: sampledPixels }];
+      while (boxes.length < 5) {
+        // Find the box with the largest volume to split
+        let maxVolIdx = 0;
+        let maxVol = 0;
+        for (let i = 0; i < boxes.length; i++) {
+          const vol = getRange(boxes[i].pixels, 0) + getRange(boxes[i].pixels, 1) + getRange(boxes[i].pixels, 2);
+          if (vol > maxVol && boxes[i].pixels.length > 1) {
+            maxVol = vol;
+            maxVolIdx = i;
+          }
+        }
+        if (maxVol === 0) break;
+        const [a, b] = splitBox(boxes[maxVolIdx]);
+        boxes.splice(maxVolIdx, 1, a, b);
+      }
+      
+      // Sort boxes by pixel count (most dominant first)
+      boxes.sort((a, b) => b.pixels.length - a.pixels.length);
+      
+      // Color naming helper
+      const getColorName = (r: number, g: number, b: number): string => {
+        const h = (() => {
+          const rr = r / 255, gg = g / 255, bb = b / 255;
+          const max = Math.max(rr, gg, bb), min = Math.min(rr, gg, bb);
+          if (max === min) return 0;
+          let hue = 0;
+          const d = max - min;
+          if (max === rr) hue = ((gg - bb) / d + (gg < bb ? 6 : 0)) * 60;
+          else if (max === gg) hue = ((bb - rr) / d + 2) * 60;
+          else hue = ((rr - gg) / d + 4) * 60;
+          return hue;
+        })();
+        const brightness = (r + g + b) / 3;
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        
+        if (sat < 20) {
+          if (brightness < 60) return '炭黑';
+          if (brightness < 120) return '灰色';
+          if (brightness < 180) return '银灰';
+          return '象牙';
+        }
+        if (brightness < 50) return '深色';
+        
+        if (h < 15 || h >= 345) return brightness > 180 ? '粉红' : '红色';
+        if (h < 40) return brightness > 180 ? '杏色' : '橙色';
+        if (h < 65) return brightness > 180 ? '鹅黄' : '金色';
+        if (h < 80) return '黄绿';
+        if (h < 160) return brightness > 180 ? '薄荷' : '绿色';
+        if (h < 200) return brightness > 180 ? '天蓝' : '青色';
+        if (h < 260) return brightness > 180 ? '浅蓝' : '蓝色';
+        if (h < 290) return brightness > 180 ? '薰衣草' : '紫色';
+        if (h < 345) return brightness > 180 ? '玫粉' : '品红';
+        return '彩色';
+      };
+      
+      const colors: AestheticColor[] = boxes.slice(0, 5).map(box => {
+        const [r, g, b] = getAvgColor(box.pixels);
+        const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+        return { hex, name: getColorName(r, g, b) };
+      });
+      
+      handleSaveGrid({ extractedColors: colors });
+    } catch (e) {
+      console.error('Color extraction error', e);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-[#fdfcfb]">
-        <motion.div 
-          animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
-          transition={{ repeat: Infinity, duration: 2 }}
-          className="w-12 h-12 rounded-full border-2 border-black/10 border-t-black/40"
-        />
-      </div>
-    );
-  }
-
   return (
     <ErrorBoundary>
-      <div className="min-h-screen w-full max-w-md mx-auto bg-[#fdfcfb] flex flex-col pb-24 relative paper-shadow border-x border-black/5" ref={cardRef}>
+      <div className="min-h-screen w-full max-w-md mx-auto bg-[#fdfcfb] flex flex-col pb-24 relative paper-shadow border-x border-black/5">
         {/* Header */}
         <header className="p-8 flex items-center justify-between sticky top-0 z-20 bg-[#fdfcfb]/90 backdrop-blur-md border-b border-black/5">
         <div className="flex items-center gap-6">
-          {!isExporting && (
-            <button 
-              onClick={() => {
-                setViewMonth(currentDate);
-                setShowCalendar(true);
-              }}
-              className="p-2.5 rounded-full hover:bg-black/5 transition-all duration-300"
-            >
-              <CalendarIcon size={22} strokeWidth={1} />
-            </button>
-          )}
+          <button 
+            onClick={() => {
+              setViewMonth(currentDate);
+              setShowCalendar(true);
+            }}
+            className="p-2.5 rounded-full hover:bg-black/5 transition-all duration-300"
+          >
+            <CalendarIcon size={22} strokeWidth={1} />
+          </button>
           <div className="flex flex-col">
             <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-neutral-400 mb-1">
               {format(currentDate, 'EEEE', { locale: zhCN })}
@@ -268,23 +365,19 @@ export default function App() {
             </span>
           </div>
         </div>
-        {!isExporting && (
-          <button 
-            onClick={handleExport}
-            className="p-2.5 rounded-full hover:bg-black/5 transition-all duration-300 text-neutral-400"
-          >
-            <Share2 size={22} strokeWidth={1} />
-          </button>
-        )}
+        <button 
+          onClick={handleExport}
+          disabled={isExporting}
+          className="p-2.5 rounded-full hover:bg-black/5 transition-all duration-300 text-neutral-400 disabled:opacity-50"
+        >
+          {isExporting ? <RefreshCw size={22} strokeWidth={1} className="animate-spin" /> : <Share2 size={22} strokeWidth={1} />}
+        </button>
       </header>
 
       {/* Main Content */}
       <main className="flex-1 px-8 py-10 space-y-12">
         <div className="text-center space-y-3 mb-12">
           <div className="flex items-center justify-center gap-2 mb-1">
-            <div className="w-8 h-8 rounded-lg bg-black flex items-center justify-center">
-              <Palette size={18} className="text-white" strokeWidth={1.5} />
-            </div>
             <h1 className="text-4xl font-serif italic tracking-tighter font-medium">ColorGrid</h1>
           </div>
           <p className="text-[11px] font-serif italic text-neutral-400 tracking-widest">每一天的色彩都值得被记录。</p>
@@ -307,22 +400,19 @@ export default function App() {
               </div>
             </div>
             <div className="flex gap-3">
-              {!isExporting && (
-                <button 
-                  onClick={handleRandomColor}
-                  className="p-3 rounded-full glass-dark hover:bg-black/10 transition-all duration-300"
-                  title="随机颜色"
-                >
-                  <RefreshCw size={18} strokeWidth={1} />
-                </button>
-              )}
+              <button 
+                onClick={handleRandomColor}
+                className="p-3 rounded-full glass-dark hover:bg-black/10 transition-all duration-300"
+                title="随机颜色"
+              >
+                <RefreshCw size={18} strokeWidth={1} />
+              </button>
             </div>
           </div>
         </section>
 
         {/* Grid Section */}
         <section className="relative">
-          {/* Frosted Glass Background for Grid */}
           <div className="absolute -inset-3 rounded-2xl overflow-hidden pointer-events-none transition-all duration-1000">
             <div 
               className="absolute inset-0 transition-all duration-1000 opacity-25 blur-2xl"
@@ -396,16 +486,13 @@ export default function App() {
         <section className="space-y-8 pb-12">
           <div className="flex items-center justify-between border-b border-black/5 pb-4">
             <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] text-neutral-400">灵感色卡</h3>
-            {!isExporting && (
-              <button 
-                onClick={extractColors}
-                disabled={isExtracting || !currentGrid?.images?.some(img => img)}
-                className="text-[10px] font-mono uppercase tracking-widest px-4 py-2 rounded-full glass-dark hover:bg-black/10 disabled:opacity-20 transition-all duration-500 flex items-center gap-2"
-              >
-                {isExtracting && <RefreshCw size={10} className="animate-spin" />}
-                {isExtracting ? '提取中...' : '生成色卡'}
-              </button>
-            )}
+            <button 
+              onClick={extractColors}
+              disabled={!currentGrid?.images?.some(img => img)}
+              className="text-[10px] font-mono uppercase tracking-widest px-4 py-2 rounded-full glass-dark hover:bg-black/10 disabled:opacity-20 transition-all duration-500 flex items-center gap-2"
+            >
+              生成色卡
+            </button>
           </div>
 
           <div className="grid grid-cols-5 gap-4">
@@ -431,31 +518,29 @@ export default function App() {
       </main>
 
       {/* Navigation Footer */}
-      {!isExporting && (
-        <footer className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-6 z-30">
-          <div className="glass rounded-3xl p-2 flex items-center justify-between shadow-lg">
-            <button 
-              onClick={() => setCurrentDate(subDays(currentDate, 1))}
-              className="p-3 rounded-2xl hover:bg-black/5 transition-colors"
-            >
-              <ChevronLeft size={20} strokeWidth={1.5} />
-            </button>
-            
-            <div className="flex flex-col items-center">
-              <span className="text-[10px] font-mono uppercase tracking-tighter text-neutral-400">
-                {isToday(currentDate) ? '今天' : format(currentDate, 'yyyy.MM.dd')}
-              </span>
-            </div>
-
-            <button 
-              onClick={() => setCurrentDate(addDays(currentDate, 1))}
-              className="p-3 rounded-2xl hover:bg-black/5 transition-colors"
-            >
-              <ChevronRight size={20} strokeWidth={1.5} />
-            </button>
+      <footer className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-6 z-30">
+        <div className="glass rounded-3xl p-2 flex items-center justify-between shadow-lg">
+          <button 
+            onClick={() => setCurrentDate(subDays(currentDate, 1))}
+            className="p-3 rounded-2xl hover:bg-black/5 transition-colors"
+          >
+            <ChevronLeft size={20} strokeWidth={1.5} />
+          </button>
+          
+          <div className="flex flex-col items-center">
+            <span className="text-[10px] font-mono uppercase tracking-tighter text-neutral-400">
+              {isToday(currentDate) ? '今天' : format(currentDate, 'yyyy.MM.dd')}
+            </span>
           </div>
-        </footer>
-      )}
+
+          <button 
+            onClick={() => setCurrentDate(addDays(currentDate, 1))}
+            className="p-3 rounded-2xl hover:bg-black/5 transition-colors"
+          >
+            <ChevronRight size={20} strokeWidth={1.5} />
+          </button>
+        </div>
+      </footer>
 
       {/* Calendar Modal */}
       <AnimatePresence>
@@ -507,8 +592,6 @@ export default function App() {
                   const start = startOfMonth(viewMonth);
                   const end = endOfMonth(viewMonth);
                   const days = eachDayOfInterval({ start, end });
-                  
-                  // Padding for start of month
                   const padding = Array(start.getDay()).fill(null);
                   
                   return [...padding, ...days].map((day, i) => {
@@ -558,6 +641,68 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+
+    {/* Offscreen Export Card */}
+    {isExporting && (
+      <div style={{ position: 'fixed', left: '-9999px', top: 0 }}>
+        <div 
+          ref={exportRef}
+          style={{ 
+            width: '400px', 
+            backgroundColor: '#fdfcfb',
+            fontFamily: 'Inter, system-ui, sans-serif',
+          }}
+        >
+          <div style={{ padding: '32px 32px 24px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+              <span style={{ fontSize: '10px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.2em', color: '#a3a3a3' }}>
+                {format(currentDate, 'EEEE', { locale: zhCN })}
+              </span>
+              <span style={{ fontSize: '24px', fontStyle: 'italic', fontWeight: 300, letterSpacing: '-0.025em', fontFamily: 'Georgia, serif' }}>
+                {format(currentDate, 'MMMM do', { locale: zhCN })}
+              </span>
+            </div>
+          </div>
+          <div style={{ padding: '24px 32px 32px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+              <h1 style={{ fontSize: '32px', fontStyle: 'italic', fontWeight: 500, letterSpacing: '-0.05em', fontFamily: 'Georgia, serif', margin: '0 0 8px' }}>ColorGrid</h1>
+              <p style={{ fontSize: '11px', fontStyle: 'italic', color: '#a3a3a3', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', margin: 0 }}>每一天的色彩都值得被记录。</p>
+              <div style={{ height: '1px', width: '48px', backgroundColor: 'rgba(0,0,0,0.1)', margin: '16px auto 0' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '32px' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: currentGrid?.color?.hex || '#f3f4f6', border: '1px solid rgba(0,0,0,0.05)', flexShrink: 0 }} />
+              <div>
+                <span style={{ fontSize: '10px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#a3a3a3', display: 'block' }}>今日主色</span>
+                <span style={{ fontSize: '22px', fontStyle: 'italic', fontFamily: 'Georgia, serif', letterSpacing: '-0.025em' }}>
+                  {currentGrid?.color?.name || '未选择颜色'}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '32px' }}>
+              {Array(9).fill(0).map((_, i) => (
+                <div key={i} style={{ aspectRatio: '1', borderRadius: '12px', overflow: 'hidden', backgroundColor: currentGrid?.images?.[i] ? 'transparent' : '#f5f5f4', border: currentGrid?.images?.[i] ? 'none' : '2px dashed rgba(0,0,0,0.05)' }}>
+                  {currentGrid?.images?.[i] && (
+                    <img src={currentGrid.images[i]} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt={`Grid ${i}`} />
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '24px' }}>
+              <h3 style={{ fontSize: '10px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.2em', color: '#a3a3a3', margin: '0 0 16px' }}>灵感色卡</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px' }}>
+                {(currentGrid?.extractedColors || Array(5).fill(null)).map((c, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '100%', aspectRatio: '1', borderRadius: '50%', backgroundColor: c?.hex || '#f3f4f6', border: '1px solid rgba(0,0,0,0.05)' }} />
+                    <span style={{ fontSize: '9px', fontFamily: 'monospace', color: '#a3a3a3' }}>{c?.hex || '----'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+
     </ErrorBoundary>
   );
 }
