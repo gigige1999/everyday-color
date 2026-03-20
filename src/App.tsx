@@ -835,7 +835,7 @@ export default function App() {
               </div>
             </div>
             <div style={{ textAlign: 'center', paddingTop: '20px', fontSize: '14px', color: '#c0c0c0' }}>
-              开发者：风系魔法师鸽鸽（小红书同名）
+              开发者：风系魔法师鸽鸽（📖地址）
             </div>
           </div>
         </div>
