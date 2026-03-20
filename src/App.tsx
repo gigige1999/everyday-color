@@ -515,6 +515,110 @@ export default function App() {
             ))}
           </div>
         </section>
+
+        {/* Palette Section - 调色盘 */}
+        {(() => {
+          // 统计所有打卡日的颜色占比
+          const colorStats: Record<string, { color: AestheticColor; count: number }> = {};
+          (Object.values(allGrids) as DailyGridData[]).forEach(grid => {
+            if (grid?.color?.hex) {
+              const key = grid.color.hex;
+              if (colorStats[key]) {
+                colorStats[key].count++;
+              } else {
+                colorStats[key] = { color: grid.color, count: 1 };
+              }
+            }
+          });
+          const sortedColors = Object.values(colorStats).sort((a, b) => b.count - a.count);
+          const totalDays = sortedColors.reduce((sum, c) => sum + c.count, 0);
+
+          if (sortedColors.length === 0) return null;
+
+          // 生成环形图的 conic-gradient
+          let gradientParts: string[] = [];
+          let accPercent = 0;
+          sortedColors.forEach((item) => {
+            const percent = (item.count / totalDays) * 100;
+            gradientParts.push(`${item.color.hex} ${accPercent}% ${accPercent + percent}%`);
+            accPercent += percent;
+          });
+          const conicGradient = `conic-gradient(${gradientParts.join(', ')})`;
+
+          return (
+            <section className="space-y-6 pb-8">
+              <div className="flex items-center border-b border-black/5 pb-4">
+                <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] text-neutral-400">调色盘 · 色彩足迹</h3>
+              </div>
+              
+              <div className="flex items-start gap-6">
+                {/* 环形色盘 */}
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.8, rotate: -90 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                  className="relative flex-shrink-0"
+                >
+                  <div 
+                    className="w-28 h-28 rounded-full shadow-lg border border-white/30"
+                    style={{ background: conicGradient }}
+                  />
+                  <div className="absolute inset-3 rounded-full bg-[#fdfcfb] shadow-inner flex flex-col items-center justify-center">
+                    <span className="text-xl font-serif italic font-medium leading-none">{totalDays}</span>
+                    <span className="text-[8px] font-mono text-neutral-400 mt-0.5">天打卡</span>
+                  </div>
+                </motion.div>
+
+                {/* 颜色排行列表 */}
+                <div className="flex-1 space-y-2 min-w-0">
+                  {sortedColors.slice(0, 6).map((item, i) => {
+                    const percent = ((item.count / totalDays) * 100).toFixed(1);
+                    return (
+                      <motion.div
+                        key={item.color.hex}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.08, duration: 0.5 }}
+                        className="flex items-center gap-2.5 group"
+                      >
+                        <div 
+                          className="w-5 h-5 rounded-md shadow-sm border border-black/5 flex-shrink-0 transition-transform group-hover:scale-110"
+                          style={{ backgroundColor: item.color.hex }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-[10px] font-serif text-neutral-600 truncate">{item.color.name}</span>
+                            <span className="text-[9px] font-mono text-neutral-400 ml-2 flex-shrink-0">{percent}%</span>
+                          </div>
+                          <div className="h-1 rounded-full bg-black/5 overflow-hidden">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${percent}%` }}
+                              transition={{ delay: i * 0.08 + 0.3, duration: 0.6, ease: 'easeOut' }}
+                              className="h-full rounded-full"
+                              style={{ backgroundColor: item.color.hex }}
+                            />
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-mono text-neutral-300 flex-shrink-0">{item.count}天</span>
+                      </motion.div>
+                    );
+                  })}
+                  {sortedColors.length > 6 && (
+                    <p className="text-[9px] font-mono text-neutral-300 text-center pt-1">
+                      还有 {sortedColors.length - 6} 种颜色...
+                    </p>
+                  )}
+                </div>
+              </div>
+            </section>
+          );
+        })()}
+
+        {/* Developer Credit */}
+        <div className="text-center text-[11px] text-neutral-300 pt-4 pb-2">
+          开发者：风系魔法师鸽鸽（小红书同名）
+        </div>
       </main>
 
       {/* Navigation Footer */}
@@ -583,9 +687,9 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-7 gap-2">
+              <div className="grid grid-cols-7 gap-1.5">
                 {['日', '一', '二', '三', '四', '五', '六'].map(d => (
-                  <div key={d} className="text-center text-[10px] font-mono text-neutral-400 py-2">{d}</div>
+                  <div key={d} className="text-center text-[10px] font-mono text-neutral-400 py-2 font-medium">{d}</div>
                 ))}
                 
                 {(() => {
@@ -601,37 +705,69 @@ export default function App() {
                     const grid = allGrids[dKey];
                     const isSelected = isSameDay(day, currentDate);
                     const isTodayDate = isToday(day);
+                    const hasColor = !!grid?.color;
+                    const hasImages = grid?.images?.some(img => img);
                     
                     return (
-                      <button
+                      <motion.button
                         key={dKey}
+                        whileHover={{ scale: 1.08 }}
+                        whileTap={{ scale: 0.95 }}
                         onClick={() => {
                           setCurrentDate(day);
                           setShowCalendar(false);
                         }}
                         className={cn(
-                          "aspect-square rounded-2xl flex flex-col items-center justify-center gap-1 relative transition-all group",
-                          isSelected ? "bg-black text-white shadow-xl scale-105 z-10" : "hover:bg-black/5",
-                          isTodayDate && !isSelected && "border border-black/10"
+                          "aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-300 overflow-hidden",
+                          isSelected 
+                            ? "shadow-lg scale-105 z-10 ring-2 ring-black/20" 
+                            : hasColor 
+                              ? "shadow-sm hover:shadow-md" 
+                              : "hover:bg-black/5",
+                          isTodayDate && !isSelected && "ring-1 ring-black/15"
                         )}
+                        style={
+                          isSelected 
+                            ? { backgroundColor: grid?.color?.hex || '#2c2c2c' }
+                            : hasColor 
+                              ? { backgroundColor: grid.color.hex + '25' } 
+                              : {}
+                        }
                       >
+                        {/* 有颜色时显示底部色条 */}
+                        {hasColor && !isSelected && (
+                          <div 
+                            className="absolute bottom-0 left-0 right-0 h-1 rounded-b-xl"
+                            style={{ backgroundColor: grid.color.hex }}
+                          />
+                        )}
+                        
                         <span className={cn(
-                          "text-xs font-mono",
-                          isSelected ? "text-white font-bold" : "text-neutral-500",
-                          isTodayDate && !isSelected && "text-black font-bold"
+                          "text-xs font-mono relative z-10 leading-none",
+                          isSelected ? "text-white font-bold text-sm" : "text-neutral-600",
+                          isTodayDate && !isSelected && "text-black font-bold",
+                          hasColor && !isSelected && "font-medium"
                         )}>
                           {format(day, 'd')}
                         </span>
-                        {grid?.color && (
-                          <div 
-                            className={cn(
-                              "w-1.5 h-1.5 rounded-full shadow-sm transition-transform group-hover:scale-125",
-                              isSelected ? "bg-white" : ""
-                            )}
-                            style={!isSelected ? { backgroundColor: grid.color.hex } : {}}
-                          />
+                        
+                        {/* 打卡图片指示点 */}
+                        {hasImages && !isSelected && (
+                          <div className="absolute top-1 right-1">
+                            <div 
+                              className="w-1.5 h-1.5 rounded-full"
+                              style={{ backgroundColor: grid?.color?.hex || '#a3a3a3' }}
+                            />
+                          </div>
                         )}
-                      </button>
+                        
+                        {/* 选中日期的色名 */}
+                        {isSelected && grid?.color && (
+                          <span className="text-[7px] text-white/70 font-mono mt-0.5 leading-none truncate max-w-full px-1">
+                            {grid.color.name}
+                          </span>
+                        )}
+                      </motion.button>
                     );
                   });
                 })()}
@@ -697,6 +833,9 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </div>
+            <div style={{ textAlign: 'center', paddingTop: '20px', fontSize: '14px', color: '#c0c0c0' }}>
+              开发者：风系魔法师鸽鸽（小红书同名）
             </div>
           </div>
         </div>
