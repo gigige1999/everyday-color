@@ -617,7 +617,7 @@ export default function App() {
 
         {/* Developer Credit */}
         <div className="text-center text-[11px] text-neutral-300 pt-4 pb-2">
-          开发者：风系魔法师鸽鸽（小红书同名）
+          开发者：风系魔法师鸽鸽（<a href="https://xhslink.com/m/8yjZZJZdEJf" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 hover:text-neutral-400 transition-colors underline underline-offset-2">📖地址</a>）
         </div>
       </main>
 
